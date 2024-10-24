@@ -1,0 +1,20 @@
+.dub
+docs.json
+__dummy.html
+docs/
+/deusex-timer
+deusex-timer.so
+deusex-timer.dylib
+deusex-timer.dll
+deusex-timer.a
+deusex-timer.lib
+deusex-timer-test-*
+*.exe
+*.pdb
+*.o
+*.obj
+*.lst
+
+# Are partial instruction dumps of games legal to share? No clue! Which is why these aren't being comitted.
+dump.txt
+test.txt
