@@ -157,6 +157,30 @@ class GameProcess
         callback(buffer);
     }
 
+    T peek(T)(size_t address)
+    {
+        T ret;
+
+        iovec local;
+        local.iov_base = cast(void*)&ret;
+        local.iov_len = T.sizeof;
+
+        iovec remote;
+        remote.iov_base = cast(void*)address;
+        remote.iov_len = T.sizeof;
+
+        const result = process_vm_readv(this._pid, &local, 1, &remote, 1, 0);
+        if(result == -1)
+        {
+            import core.stdc.errno : errno;
+            import std.string : fromStringz;
+            import core.sys.posix.string : strerror;
+            throw new Exception("Failed to peek memory: " ~ strerror(errno).fromStringz.idup);
+        }
+
+        return ret;
+    }
+
     bool mapStillExists(MemoryMap map)
     {
         import std.algorithm : any;

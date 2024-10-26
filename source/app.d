@@ -1,4 +1,4 @@
-import toolkit.process, toolkit.finders, toolkit.patcher;
+import toolkit.process, toolkit.finders, toolkit.patcher, toolkit.ui;
 
 version(linux){}
 else static assert(false, "Only Linux is supported.");
@@ -8,46 +8,60 @@ else static assert(false, "Only amd64 machines are supported.");
 
 int main()
 {
+    import core.time : dur;
+
     GameProcess deusex;
     Patcher enginePatcher;
     size_t flagsAddress;
 
     findDeusEx(/*out*/ deusex, /*out*/ enginePatcher);
-    scope(failure) deusex.detach(); // The dtor doesn't always run, so on failure make sure we always detach.
 
-    patchFlagSettersIntoLoadMap(deusex, enginePatcher, /*out*/ flagsAddress);
-    deusex.detach(); // PTRACE_ATTACH forces the program to pause, so this is just to unpause it. We don't need it to modify memory anymore.
+    try patchFlagSettersIntoLoadMap(deusex, enginePatcher, /*out*/ flagsAddress);
+    finally deusex.detach(); // PTRACE_ATTACH forces the program to pause, so this is just to unpause it. We don't need it to modify memory anymore.
 
-    bool before = false;
-    while(true)
-    {
-        // Temp loop just to double check it actually works.
-        import core.sys.posix.sys.uio : iovec;
-        import toolkit.process : process_vm_readv;
+    auto timer = new Timer();
+    auto controller = new UpdateOnlyComponent(deusExController(timer, deusex, flagsAddress));
 
-        bool current;
-
-        iovec local;
-        local.iov_base = cast(void*)&current;
-        local.iov_len = 1;
-
-        iovec remote;
-        remote.iov_base = cast(void*)flagsAddress;
-        remote.iov_len = 1;
-
-        process_vm_readv(deusex.pid, &local, 1, &remote, 1, 0);
-
-        if(before != current)
-        {
-            import std.stdio : writeln;
-            writeln(current); // dear christ it's working.
-            before = current;
-        }
-
-        // The amount of effort to get to this point :joy: - Actual timer coming soon.
-    }
+    auto ui = new UiLoop();
+    ui.addComponent(controller);
+    ui.addComponent(timer);
+    ui.loop(dur!"msecs"(8)); // Try to be 2x faster than the game to minimise amount of extra time added to the timer.
 
     return 0;
+}
+
+auto deusExController(Timer timer, GameProcess deusex, size_t flagsAddress)
+{
+    import core.time : Duration;
+
+    enum State
+    {
+        waitingForFirstLoad,
+        normal,
+    }
+    State state;
+
+    return delegate (Duration _){
+        // process_vm_readv sometimes fails with ESRCH and I have no idea why, so ignore any errors for now.
+        bool isLoading = false;
+        try isLoading = deusex.peek!bool(flagsAddress);
+        catch(Exception) return;
+        
+        final switch(state) with(State)
+        {
+            case waitingForFirstLoad:
+                if(isLoading)
+                    state = normal;
+                break;
+
+            case normal:
+                if(isLoading)
+                    timer.pause();
+                else
+                    timer.resume();
+                break;
+        }
+    };
 }
 
 void findDeusEx(out GameProcess deusex, out Patcher enginePatcher)
