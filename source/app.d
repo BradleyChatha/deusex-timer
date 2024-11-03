@@ -6,6 +6,12 @@ else static assert(false, "Only Linux is supported.");
 version(X86_64) {}
 else static assert(false, "Only amd64 machines are supported.");
 
+struct FStringNoCap
+{
+    uint ptr;
+    uint length;
+}
+
 int main()
 {
     import core.time : dur;
@@ -13,24 +19,40 @@ int main()
     GameProcess deusex;
     Patcher enginePatcher;
     size_t flagsAddress;
+    size_t lastLoadedMapAddress;
 
     findDeusEx(/*out*/ deusex, /*out*/ enginePatcher);
 
-    try patchFlagSettersIntoLoadMap(deusex, enginePatcher, /*out*/ flagsAddress);
+    try patchFlagSettersIntoLoadMap(deusex, enginePatcher, /*out*/ flagsAddress, /*out*/ lastLoadedMapAddress);
     finally deusex.detach(); // PTRACE_ATTACH forces the program to pause, so this is just to unpause it. We don't need it to modify memory anymore.
 
     auto timer = new Timer();
-    auto controller = new UpdateOnlyComponent(deusExController(timer, deusex, flagsAddress));
+    auto mapLabel = new Label("", Ansi.blue);
+    auto controller = new UpdateOnlyComponent(deusExController(
+        timer, 
+        mapLabel,
+        deusex, 
+        flagsAddress, 
+        lastLoadedMapAddress,
+    ));
 
     auto ui = new UiLoop();
     ui.addComponent(controller);
     ui.addComponent(timer);
+    ui.addComponent(mapLabel);
+    ui.addComponent(new Label("Note: End-of-game detection \n        not implemented yet."));
     ui.loop(dur!"msecs"(8)); // Try to be 2x faster than the game to minimise amount of extra time added to the timer.
 
     return 0;
 }
 
-auto deusExController(Timer timer, GameProcess deusex, size_t flagsAddress)
+auto deusExController(
+    Timer timer, 
+    Label mapLabel,
+    GameProcess deusex, 
+    size_t flagsAddress,
+    size_t lastLoadedMapAddress,
+)
 {
     import core.time : Duration;
 
@@ -40,12 +62,16 @@ auto deusExController(Timer timer, GameProcess deusex, size_t flagsAddress)
         normal,
     }
     State state;
+    bool wasLoadingLastTick;
+    string lastLoadedMap;
 
     return delegate (Duration _){
         // process_vm_readv sometimes fails with ESRCH and I have no idea why, so ignore any errors for now.
         bool isLoading = false;
         try isLoading = deusex.peek!bool(flagsAddress);
         catch(Exception) return;
+        
+        scope(exit) wasLoadingLastTick = isLoading;
         
         final switch(state) with(State)
         {
@@ -55,13 +81,97 @@ auto deusExController(Timer timer, GameProcess deusex, size_t flagsAddress)
                 break;
 
             case normal:
-                if(isLoading)
-                    timer.pause();
-                else
+                if(!isLoading)
+                {
                     timer.resume();
+
+                    if(wasLoadingLastTick)
+                    {
+                        FStringNoCap lastLoadedMapPtr;
+                        while(true)
+                        {
+                            try lastLoadedMapPtr = deusex.peek!FStringNoCap(lastLoadedMapAddress);
+                            catch(Exception) continue;
+                            break;
+                        }
+
+                        if(lastLoadedMapPtr.ptr > 0)
+                        {
+                            lastLoadedMap = toDString(deusex, lastLoadedMapPtr);
+                            mapLabel.text = lastLoadedMap;
+                        }
+                    }
+                }
+                else
+                    timer.pause();
                 break;
         }
     };
+}
+
+string toDString(GameProcess deusex, FStringNoCap source)
+{
+    import std.algorithm : filter, all;
+    import std.exception : assumeUnique;
+
+    const sourceMap = deusex.memoryMaps
+                        .filter!(m => source.ptr >= m.start && source.ptr <= m.end)
+                        .front;
+
+    auto result = new char[source.length];
+    bool tryAgain = true;
+    int attempts;
+
+    while(tryAgain)
+    {
+        if(attempts++ >= int.max)
+            return "Failed (process_vm_readv bug?)";
+
+        tryAgain = false;
+        deusex.accessMemory(sourceMap, (scope memory){
+            // Characters are in some two-byte format, so we just need to take the first byte of each pair.
+            const relativePtr = source.ptr - sourceMap.start;
+            foreach(i; 0..source.length)
+            {
+                // Sometimes we get junk memory back... and I'm not sure why since all the numbers are correct.
+                // So just keep trying again if it happens lol.
+                const ch = memory[relativePtr + (2 * i)];
+                switch(ch)
+                {
+                    case 'a': .. case 'z': break;
+                    case 'A': .. case 'Z': break;
+                    case '0': .. case '9': break;
+                    
+                    case ' ':
+                    case '.':
+                    case '_':
+                    case '\\':
+                        break;
+
+                    case '\0':
+                        if(i == source.length-1) // @suppress(dscanner.suspicious.length_subtraction)
+                            break;
+                        goto default;
+
+                    default:
+                        import std.stdio : writeln;
+                        writeln(
+                            "bad char: ", cast(char)ch, " ", cast(int)ch, 
+                            " @ ", relativePtr, " + ", 2 * i, " = ", relativePtr + (2 * i), 
+                            " | ", source, " ", sourceMap.start
+                        );
+                        tryAgain = true;
+                        break;
+                }
+
+                result[i] = ch;
+            }
+        });
+    }
+
+    if(result.length && result[$-1] == 0)
+        result = result[0..$-1];
+    return result.assumeUnique;
 }
 
 void findDeusEx(out GameProcess deusex, out Patcher enginePatcher)
@@ -102,14 +212,21 @@ void findDeusEx(out GameProcess deusex, out Patcher enginePatcher)
            start from this instruction instead.
 
         2. Move some of the ending instructions into unused memory, and prefix it with an instruction to set
-           the flag to 0, and replace the old instructions with a jump to this extended prologue.
+           the flag to 0, and replace the old instructions with a jump to this extended epilog.
+
+            2.1. Also includes instructions to fetch the loaded map name, and store it to a well known location.
 
     Read the function comments for specifics.
 
     I should note that I could've hardcoded a lot of addresses and made things much easier on myself, but
     I kinda wanted to do it "semi-properly" for funsies.
 +/
-void patchFlagSettersIntoLoadMap(GameProcess deusex, Patcher enginePatcher, out size_t flagsAddress)
+void patchFlagSettersIntoLoadMap(
+    GameProcess deusex, 
+    Patcher enginePatcher, 
+    out size_t flagsAddress,
+    out size_t lastLoadedMapAddress,
+)
 {
     import std.algorithm : filter, canFind;
     import std.array     : array;
@@ -146,13 +263,21 @@ void patchFlagSettersIntoLoadMap(GameProcess deusex, Patcher enginePatcher, out 
     ], (scope memoryAfterSig){ return 0; });
 
     // Engine.dll creates at least 2 writeable mappings.
-    // It's very unlikely the last byte of the last mapping is in actual use, so we can use it to store our own flags.
+    // It's very unlikely the last bytes of the last mapping are in actual use, so we can use it to store our own values.
     const mapToStoreFlags = deusex.memoryMaps
                             .filter!(m => m.pathname.canFind("Engine.dll") && m.writable)
                             .array[$-1];
-    deusex.accessMemory(mapToStoreFlags, (scope memory){ enforce(memory[$-1] == 0, "Last byte is in use :("); });
+    deusex.accessMemory(mapToStoreFlags, (scope memory){ 
+        const flagBytes = 1;
+        const loadedMapPtrBytes = 8;
+        const totalBytes = flagBytes + loadedMapPtrBytes;
+        // foreach(i; 0..totalBytes)
+        //     enforce(memory[$-(1+i)] == 0, "Last byte is in use :("); 
+    });
     flagsAddress = mapToStoreFlags.end - 1;
+    lastLoadedMapAddress = mapToStoreFlags.end - 9;
     writefln("Storing flag byte at 0x%08X", flagsAddress);
+    writefln("Storing last loaded map pointer at 0x%08X", lastLoadedMapAddress);
 
     if(loadMapJumpSigResult.isNull) // If we can't find it, assume we've already patched the process... could probably make it better, but meh.
     {
@@ -201,6 +326,15 @@ void patchFlagSettersIntoLoadMap(GameProcess deusex, Patcher enginePatcher, out 
         Fortunately there's a massive amount of nops & int3s near the end, so we can just stuff everything there.
 
         I just hope those other rets are error cases. I couldn't actually see what jumps into those branches though.
+
+        Additionally, LoadMap returns a ULevel which appears to store the map's name at offset 0x60.
+        This string type appears to be very standard: pointer + size + capacity.
+        
+        The characters are stored in two bytes (UTF-16?). At the very least the first byte is ASCII compatible,
+        and the second is always 0 for these ASCII characters, so it's easy to handle still.
+
+        So we can also inject some code to store the pointer to the loaded map name for us, which we can later
+        read to do things like auto splits!
     ++/
     const retOffset = loadMapSig.offset + loadMapSig.estimatedSize;
     const retPopAndMovOffset = retOffset - 3;
@@ -235,6 +369,44 @@ void patchFlagSettersIntoLoadMap(GameProcess deusex, Patcher enginePatcher, out 
     ];
     printHex("unsetFlagInstructions: ", unsetFlagInstructions[]);
 
+    const ubyte[8][3] stashMapNameInstructions = [
+        [
+            // eax (used as the return register) contains a ULevel. ULevel + 0x60 is a string type, 
+            // where the first four bytes is a pointer to the raw string data. This string is the level name.
+            0x8B, 0x48, 0x60, // rest of: mov dword ecx, [eax + 0x60]
+
+            // mov [LastLoadedMapPtr], ecx
+            0x89, 0x0D,
+            cast(ubyte)(lastLoadedMapAddress & 0xFF), 
+            cast(ubyte)((lastLoadedMapAddress & 0xFF00) >> (8 * 1)), 
+            cast(ubyte)((lastLoadedMapAddress & 0xFF0000) >> (8 * 2)), 
+        ],
+        [
+            // Last byte of the previous instruction
+            cast(ubyte)((lastLoadedMapAddress & 0xFF000000) >> (8 * 3)), 
+            
+            // We also need to stash the length so we know exactly how much memory to read, otherwise
+            // we'd have to write a (potentially) slooow loop.
+            0x8B, 0x48, 0x64, // mov dword ecx, [eax + 0x64]
+
+            // mov [LastLoadedMapLength], ecx
+            0x89, 0x0D, 
+            cast(ubyte)((lastLoadedMapAddress + 4) & 0xFF), 
+            cast(ubyte)(((lastLoadedMapAddress + 4) & 0xFF00) >> (8 * 1)), 
+        ],
+        [
+            // Last two bytes of the previous instruction
+            cast(ubyte)(((lastLoadedMapAddress + 4) & 0xFF0000) >> (8 * 2)), 
+            cast(ubyte)(((lastLoadedMapAddress + 4) & 0xFF000000) >> (8 * 3)), 
+
+            // nops
+            0x90,0x90,0x90,0x90,0x90,0x90,
+        ]
+    ];
+    printHex("stashMapNameInstructions[0]: ", stashMapNameInstructions[0][]);
+    printHex("stashMapNameInstructions[1]: ", stashMapNameInstructions[1][]);
+    printHex("stashMapNameInstructions[2]: ", stashMapNameInstructions[2][]);
+
     const relativeJumpOffset = (endOfLoadMapInstructions - retOffset) - 2; // Reminder: relative jmps occur after the IP is updated, so we have to remove the extra bytes that are read as part of the jmp instruction.
     ubyte[8] jumpMiniDetourInstructions = [
         // jmp [rel NewEndOfLoadMap]
@@ -252,8 +424,12 @@ void patchFlagSettersIntoLoadMap(GameProcess deusex, Patcher enginePatcher, out 
     printHex("jumpMiniDetourInstructions: ", jumpMiniDetourInstructions[]);
 
     endOfLoadMapInstructions -= loadMapSig.offset; // Make it relative to the start of the function, rather than start of the map.
+    writefln("injected ending: 0x%08X", loadMapSig.map.start + loadMapSig.offset + endOfLoadMapInstructions);
     enginePatcher.poke8Bytes(loadMapSig, endOfLoadMapInstructions, unsetFlagInstructions);
-    enginePatcher.poke8Bytes(loadMapSig, endOfLoadMapInstructions+8, [
+    enginePatcher.poke8Bytes(loadMapSig, endOfLoadMapInstructions+8, stashMapNameInstructions[0]);
+    enginePatcher.poke8Bytes(loadMapSig, endOfLoadMapInstructions+16, stashMapNameInstructions[1]);
+    enginePatcher.poke8Bytes(loadMapSig, endOfLoadMapInstructions+24, stashMapNameInstructions[2]);
+    enginePatcher.poke8Bytes(loadMapSig, endOfLoadMapInstructions+32, [
         retPopAndMovInstructions[0],
         retPopAndMovInstructions[1],
         retPopAndMovInstructions[2],

@@ -76,6 +76,27 @@ class UpdateOnlyComponent : UiComponent
     override void draw() {}
 }
 
+class Label : UiComponent
+{
+    string text;
+    string colour;
+
+    this(string text, string colour = Ansi.hiBlack)
+    {
+        this.text = text;
+        this.colour = colour;
+    }
+
+    override void draw()
+    {
+        import std.stdio : writefln;
+        if(this.text.length != 0)
+            writefln("  %s%s%s", this.colour, this.text, Ansi.reset);
+    }
+
+    override void update(Duration _){}
+}
+
 class Timer : UiComponent
 {
     private
@@ -147,7 +168,6 @@ class Timer : UiComponent
             case running:
                 drawDuration("LRT", this._elapsed);
                 drawDuration("RTA", this._rtaElapsed);
-                writefln("  %s%s%s", Ansi.hiBlack, "Note: End-of-game detection \n        not implemented yet.", Ansi.reset);
                 break;
         }
     }

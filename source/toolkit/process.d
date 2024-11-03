@@ -135,7 +135,7 @@ class GameProcess
         import core.memory : GC;
 
         auto buffer = (cast(ubyte*)GC.malloc(map.end - map.start, 0, typeid(ubyte)))[0..map.end - map.start];
-        scope(exit) GC.free(buffer.ptr);
+        // scope(exit) GC.free(buffer.ptr); -- Might be causing the string reading bug... but I don't understand why since the buffer itself is already borked when it reaches the callback?
 
         iovec local;
         local.iov_base = buffer.ptr;
