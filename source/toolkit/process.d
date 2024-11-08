@@ -130,12 +130,17 @@ class GameProcess
         this._maps = mappings;
     }
 
+    // NOTE: process_vm_readv seems to be buggy when reading a mapping that has recently
+    //       written memory - try `peek` instead to only read a very specific region of memory instead,
+    //       which for some reason seems more stable.
+    //
+    //       May be related to reading across multiple pages (I wonder how process_vm_readv interacts with paging).
     void accessMemory(MemoryMap map, void delegate(scope const ubyte[]) callback)
     {
         import core.memory : GC;
 
         auto buffer = (cast(ubyte*)GC.malloc(map.end - map.start, 0, typeid(ubyte)))[0..map.end - map.start];
-        // scope(exit) GC.free(buffer.ptr); -- Might be causing the string reading bug... but I don't understand why since the buffer itself is already borked when it reaches the callback?
+        scope(exit) GC.free(buffer.ptr);
 
         iovec local;
         local.iov_base = buffer.ptr;
@@ -179,6 +184,28 @@ class GameProcess
         }
 
         return ret;
+    }
+
+    ubyte[] peek(size_t address, return ubyte[] buffer)
+    {
+        iovec local;
+        local.iov_base = cast(void*)&buffer[0];
+        local.iov_len = buffer.length;
+
+        iovec remote;
+        remote.iov_base = cast(void*)address;
+        remote.iov_len = buffer.length;
+
+        const result = process_vm_readv(this._pid, &local, 1, &remote, 1, 0);
+        if(result == -1)
+        {
+            import core.stdc.errno : errno;
+            import std.string : fromStringz;
+            import core.sys.posix.string : strerror;
+            throw new Exception("Failed to peek memory: " ~ strerror(errno).fromStringz.idup);
+        }
+
+        return buffer[0..result];
     }
 
     bool mapStillExists(MemoryMap map)

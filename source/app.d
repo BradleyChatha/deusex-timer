@@ -12,9 +12,74 @@ struct FStringNoCap
     uint length;
 }
 
+const STARTING_MAP = "01_NYC_UNATCOIsland";
+const ENDING_MAP   = "99_Endgame1";
+
+const SAVE_FILE         = "splits.json";
+const BACKUP_FILE       = SAVE_FILE~".bak";
+const SAFE_BACKUP_FILE  = BACKUP_FILE~".safe";
+
+auto INITIAL_SPLITS = [
+    SplitList.Split("01_NYC_UNATCOIsland"),
+    SplitList.Split("01_NYC_UNATCOHQ"),
+    SplitList.Split("..\\Save\\Current\\01_NYC_UNATCOIsland.dxs", "01_NYC_UNATCOIsland1"),
+    SplitList.Split("02_NYC_BatteryPark"),
+    SplitList.Split("02_NYC_Street"),
+    SplitList.Split("02_NYC_Warehouse"),
+    SplitList.Split("03_NYC_UNATCOIsland"),
+    SplitList.Split("03_NYC_UNATCOHQ"),
+    SplitList.Split("03_NYC_BatteryPark"),
+    SplitList.Split("03_NYC_BrooklynBridgeStation"),
+    SplitList.Split("03_NYC_MolePeople"),
+    SplitList.Split("03_NYC_AirfieldHeliBase"),
+    SplitList.Split("03_NYC_Airfield"),
+    SplitList.Split("03_NYC_Hangar"),
+    SplitList.Split("04_NYC_UNATCOIsland.dx"),
+    SplitList.Split("04_NYC_UNATCOHQ"),
+    SplitList.Split("04_NYC_Street"),
+    SplitList.Split("04_NYC_NSFHQ"),
+    SplitList.Split("04_NYC_Hotel"),
+    SplitList.Split("05_NYC_UNATCOMJ12Lab"),
+    SplitList.Split("05_NYC_UNATCOHQ"),
+    SplitList.Split("06_hongkong_helibase.dx", "06_HongKong_Helibase"),
+    SplitList.Split("06_HongKong_WanChai_Market", "06_HongKong_Market"),
+    SplitList.Split("06_HongKong_VersaLife"),
+    SplitList.Split("06_HongKong_MJ12lab"),
+    SplitList.Split("06_HongKong_Storage"),
+    SplitList.Split("06_HongKong_WanChai_Canal", "06_HongKong_Canal"),
+    SplitList.Split("06_HongKong_TongBase"),
+    SplitList.Split("08_NYC_Street"),
+    SplitList.Split("08_NYC_Bar"),
+    SplitList.Split("09_NYC_Dockyard"),
+    SplitList.Split("09_NYC_ShipFan"),
+    SplitList.Split("09_NYC_Ship"),
+    SplitList.Split("09_NYC_ShipBelow"),
+    SplitList.Split("09_NYC_Graveyard"),
+    SplitList.Split("10_Paris_Catacombs"),
+    SplitList.Split("10_Paris_Catacombs_Tunnels"),
+    SplitList.Split("10_Paris_Metro"),
+    SplitList.Split("10_Paris_Club"),
+    SplitList.Split("10_Paris_Chateau"),
+    SplitList.Split("11_Paris_Cathedral"),
+    SplitList.Split("11_Paris_Underground"),
+    SplitList.Split("11_PARIS_EVERETT", "11_Paris_Everett"),
+    SplitList.Split("12_Vandenberg_cmd"),
+    SplitList.Split("12_Vandenberg_gas"),
+    SplitList.Split("14_Vandenberg_sub"),
+    SplitList.Split("14_OceanLab_Lab.dx", "14_OceanLab_Lab"),
+    SplitList.Split("14_OceanLab_UC.dx", "14_OceanLab_UC"),
+    SplitList.Split("14_Oceanlab_silo.dx", "14_Oceanlab_Silo"),
+    SplitList.Split("15_area51_bunker.dx", "15_Area51_Bunker"),
+    SplitList.Split("15_Area51_entrance", "15_Area51_Entrance"),
+    SplitList.Split("15_Area51_Final"),
+];
+
 int main()
 {
-    import core.time : dur;
+    import core.time        : dur;
+    import std.exception    : enforce;
+    import std.file         : exists, copy, writeFile = write, removeFile = remove, readText;
+    import std.json         : JSONValue, parseJSON;
 
     GameProcess deusex;
     Patcher enginePatcher;
@@ -26,11 +91,26 @@ int main()
     try patchFlagSettersIntoLoadMap(deusex, enginePatcher, /*out*/ flagsAddress, /*out*/ lastLoadedMapAddress);
     finally deusex.detach(); // PTRACE_ATTACH forces the program to pause, so this is just to unpause it. We don't need it to modify memory anymore.
 
+    enforce(!BACKUP_FILE.exists, "Backup split file exists - the last save must've failed, please restore the .bak.safe file, and remove the .bak file."); // @suppress(dscanner.style.long_line)
+    JSONValue savedSplits = JSONValue.emptyObject;
+    if(SAVE_FILE.exists)
+    {
+        savedSplits = parseJSON(readText(SAVE_FILE));
+    }
+    else
+    {
+        savedSplits["personalBest"] = JSONValue.emptyArray;
+        savedSplits["fastestEver"] = JSONValue.emptyArray;
+        savedSplits["slowestEver"] = JSONValue.emptyArray;
+    }
+
     auto timer = new Timer();
     auto mapLabel = new Label("", Ansi.blue);
+    auto splitList = new SplitList(INITIAL_SPLITS, savedSplits);
     auto controller = new UpdateOnlyComponent(deusExController(
         timer, 
         mapLabel,
+        splitList,
         deusex, 
         flagsAddress, 
         lastLoadedMapAddress,
@@ -40,8 +120,16 @@ int main()
     ui.addComponent(controller);
     ui.addComponent(timer);
     ui.addComponent(mapLabel);
-    ui.addComponent(new Label("Note: End-of-game detection \n        not implemented yet."));
+    ui.addComponent(splitList);
     ui.loop(dur!"msecs"(8)); // Try to be 2x faster than the game to minimise amount of extra time added to the timer.
+
+    const splitsJson = splitList.toJson();
+    if(SAVE_FILE.exists)
+        copy(SAVE_FILE, BACKUP_FILE);
+    writeFile(SAVE_FILE, splitsJson.toPrettyString());
+    if(BACKUP_FILE.exists)
+        copy(BACKUP_FILE, SAFE_BACKUP_FILE);
+    removeFile(BACKUP_FILE);
 
     return 0;
 }
@@ -49,6 +137,7 @@ int main()
 auto deusExController(
     Timer timer, 
     Label mapLabel,
+    SplitList splitList,
     GameProcess deusex, 
     size_t flagsAddress,
     size_t lastLoadedMapAddress,
@@ -60,6 +149,7 @@ auto deusExController(
     {
         waitingForFirstLoad,
         normal,
+        endCutscene,
     }
     State state;
     bool wasLoadingLastTick;
@@ -72,38 +162,53 @@ auto deusExController(
         catch(Exception) return;
         
         scope(exit) wasLoadingLastTick = isLoading;
+        splitList.updateElapsedTime(timer.elapsed);
+
+        if(wasLoadingLastTick && !isLoading)
+        {
+            FStringNoCap lastLoadedMapPtr;
+            while(true)
+            {
+                try lastLoadedMapPtr = deusex.peek!FStringNoCap(lastLoadedMapAddress);
+                catch(Exception) continue;
+                break;
+            }
+
+            if(lastLoadedMapPtr.ptr > 0)
+            {
+                lastLoadedMap = toDString(deusex, lastLoadedMapPtr);
+                mapLabel.text = lastLoadedMap;
+            }
+        }
         
         final switch(state) with(State)
         {
             case waitingForFirstLoad:
-                if(isLoading)
+                if(lastLoadedMap == STARTING_MAP)
                     state = normal;
                 break;
 
             case normal:
                 if(!isLoading)
                 {
-                    timer.resume();
+                    splitList.splitIfIdMatchesNext(lastLoadedMap);
 
-                    if(wasLoadingLastTick)
+                    if(lastLoadedMap == ENDING_MAP)
                     {
-                        FStringNoCap lastLoadedMapPtr;
-                        while(true)
-                        {
-                            try lastLoadedMapPtr = deusex.peek!FStringNoCap(lastLoadedMapAddress);
-                            catch(Exception) continue;
-                            break;
-                        }
-
-                        if(lastLoadedMapPtr.ptr > 0)
-                        {
-                            lastLoadedMap = toDString(deusex, lastLoadedMapPtr);
-                            mapLabel.text = lastLoadedMap;
-                        }
+                        state = endCutscene;
+                        goto case endCutscene;
                     }
+
+                    timer.resume();
                 }
                 else
                     timer.pause();
+                break;
+
+            case endCutscene:
+                timer.pause();
+                splitList.updateSplits();
+                mapLabel.text = "🎉🎉 Ending cutscene, run complete! 🎉🎉";
                 break;
         }
     };
@@ -124,49 +229,60 @@ string toDString(GameProcess deusex, FStringNoCap source)
 
     while(tryAgain)
     {
-        if(attempts++ >= int.max)
+        if(attempts++ >= 5)
             return "Failed (process_vm_readv bug?)";
 
         tryAgain = false;
-        deusex.accessMemory(sourceMap, (scope memory){
-            // Characters are in some two-byte format, so we just need to take the first byte of each pair.
-            const relativePtr = source.ptr - sourceMap.start;
-            foreach(i; 0..source.length)
+
+        auto charBuffer = new ubyte[source.length * 2];
+        const(char)[] chars;
+        try chars = cast(char[])deusex.peek(source.ptr, charBuffer); // Sometimes randomly fails
+        catch(Exception)
+        {
+            tryAgain = true;
+            continue;
+        }
+        if(chars.length < charBuffer.length)
+        {
+            tryAgain = true;
+            continue;
+        }
+        
+        foreach(i; 0..source.length)
+        {
+            // Sometimes we get junk memory back... and I'm not sure why since all the numbers are correct.
+            // So just keep trying again if it happens lol.
+            const ch = chars[2 * i];
+            switch(ch)
             {
-                // Sometimes we get junk memory back... and I'm not sure why since all the numbers are correct.
-                // So just keep trying again if it happens lol.
-                const ch = memory[relativePtr + (2 * i)];
-                switch(ch)
-                {
-                    case 'a': .. case 'z': break;
-                    case 'A': .. case 'Z': break;
-                    case '0': .. case '9': break;
-                    
-                    case ' ':
-                    case '.':
-                    case '_':
-                    case '\\':
+                case 'a': .. case 'z': break;
+                case 'A': .. case 'Z': break;
+                case '0': .. case '9': break;
+                
+                case ' ':
+                case '.':
+                case '_':
+                case '\\':
+                    break;
+
+                case '\0':
+                    if(i == source.length-1) // @suppress(dscanner.suspicious.length_subtraction)
                         break;
+                    goto default;
 
-                    case '\0':
-                        if(i == source.length-1) // @suppress(dscanner.suspicious.length_subtraction)
-                            break;
-                        goto default;
-
-                    default:
-                        import std.stdio : writeln;
-                        writeln(
-                            "bad char: ", cast(char)ch, " ", cast(int)ch, 
-                            " @ ", relativePtr, " + ", 2 * i, " = ", relativePtr + (2 * i), 
-                            " | ", source, " ", sourceMap.start
-                        );
-                        tryAgain = true;
-                        break;
-                }
-
-                result[i] = ch;
+                default:
+                    import std.stdio : writeln;
+                    writeln(
+                        "bad char: ", cast(char)ch, " ", cast(int)ch, 
+                        " @ ", 2 * i, 
+                        " | ", source, " ", sourceMap.start
+                    );
+                    tryAgain = true;
+                    break;
             }
-        });
+
+            result[i] = ch;
+        }
     }
 
     if(result.length && result[$-1] == 0)
