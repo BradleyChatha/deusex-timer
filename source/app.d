@@ -28,16 +28,20 @@ auto INITIAL_SPLITS = [
     SplitList.Split("02_NYC_Warehouse"),
     SplitList.Split("03_NYC_UNATCOIsland"),
     SplitList.Split("03_NYC_UNATCOHQ"),
+    SplitList.Split("..\\Save\\Current\\03_NYC_UNATCOIsland.dxs", "03_NYC_UNATCOIsland1"),
     SplitList.Split("03_NYC_BatteryPark"),
     SplitList.Split("03_NYC_BrooklynBridgeStation"),
     SplitList.Split("03_NYC_MolePeople"),
     SplitList.Split("03_NYC_AirfieldHeliBase"),
     SplitList.Split("03_NYC_Airfield"),
     SplitList.Split("03_NYC_Hangar"),
-    SplitList.Split("04_NYC_UNATCOIsland.dx"),
+    SplitList.Split("..\\Save\\Current\\03_NYC_Airfield.dxs", "03_NYC_Airfield1"),
+    SplitList.Split("04_NYC_UNATCOIsland.dx", "04_NYC_UNATCOIsland1"),
     SplitList.Split("04_NYC_UNATCOHQ"),
+    SplitList.Split("..\\Save\\Current\\04_NYC_UNATCOIsland.dxs", "04_NYC_UNATCOIsland1"),
     SplitList.Split("04_NYC_Street"),
     SplitList.Split("04_NYC_NSFHQ"),
+    SplitList.Split("..\\Save\\Current\\04_NYC_Street.dxs", "04_NYC_Street"),
     SplitList.Split("04_NYC_Hotel"),
     SplitList.Split("05_NYC_UNATCOMJ12Lab"),
     SplitList.Split("05_NYC_UNATCOHQ"),
@@ -47,18 +51,25 @@ auto INITIAL_SPLITS = [
     SplitList.Split("06_HongKong_MJ12lab"),
     SplitList.Split("06_HongKong_Storage"),
     SplitList.Split("06_HongKong_WanChai_Canal", "06_HongKong_Canal"),
+    SplitList.Split("..\\Save\\Current\\06_HongKong_WanChai_Market.dxs", "06_HongKong_Market1"),
     SplitList.Split("06_HongKong_TongBase"),
+    SplitList.Split("..\\Save\\Current\\06_HongKong_WanChai_Market.dxs", "06_HongKong_Market2"),
     SplitList.Split("08_NYC_Street"),
     SplitList.Split("08_NYC_Bar"),
+    SplitList.Split("..\\Save\\Current\\08_NYC_Street.dxs", "08_NYC_Street1"),
     SplitList.Split("09_NYC_Dockyard"),
     SplitList.Split("09_NYC_ShipFan"),
     SplitList.Split("09_NYC_Ship"),
     SplitList.Split("09_NYC_ShipBelow"),
+    SplitList.Split("..\\Save\\Current\\09_NYC_Ship.dxs", "09_NYC_Ship1"),
+    SplitList.Split("..\\Save\\Current\\09_NYC_ShipFan.dxs", "09_NYC_ShipFan1"),
+    SplitList.Split("..\\Save\\Current\\09_NYC_Dockyard.dxs", "09_NYC_Dockyard1"),
     SplitList.Split("09_NYC_Graveyard"),
     SplitList.Split("10_Paris_Catacombs"),
     SplitList.Split("10_Paris_Catacombs_Tunnels"),
     SplitList.Split("10_Paris_Metro"),
     SplitList.Split("10_Paris_Club"),
+    SplitList.Split("..\\Save\\Current\\10_Paris_Metro.dxs", "10_Paris_Metro1"),
     SplitList.Split("10_Paris_Chateau"),
     SplitList.Split("11_Paris_Cathedral"),
     SplitList.Split("11_Paris_Underground"),
@@ -68,6 +79,8 @@ auto INITIAL_SPLITS = [
     SplitList.Split("14_Vandenberg_sub"),
     SplitList.Split("14_OceanLab_Lab.dx", "14_OceanLab_Lab"),
     SplitList.Split("14_OceanLab_UC.dx", "14_OceanLab_UC"),
+    SplitList.Split("..\\Save\\Current\\14_OceanLab_Lab.dxs", "14_OceanLab_Lab1"),
+    SplitList.Split("..\\Save\\Current\\14_Vandenberg_sub.dxs", "14_Vandenberg_sub1"),
     SplitList.Split("14_Oceanlab_silo.dx", "14_Oceanlab_Silo"),
     SplitList.Split("15_area51_bunker.dx", "15_Area51_Bunker"),
     SplitList.Split("15_Area51_entrance", "15_Area51_Entrance"),
@@ -121,7 +134,7 @@ int main()
     ui.addComponent(timer);
     ui.addComponent(mapLabel);
     ui.addComponent(splitList);
-    ui.loop(dur!"msecs"(8)); // Try to be 2x faster than the game to minimise amount of extra time added to the timer.
+    ui.loop(dur!"msecs"(16)); // Try to be 2x faster than the game to minimise amount of extra time added to the timer.
 
     const splitsJson = splitList.toJson();
     if(SAVE_FILE.exists)
@@ -176,7 +189,8 @@ auto deusExController(
 
             if(lastLoadedMapPtr.ptr > 0)
             {
-                lastLoadedMap = toDString(deusex, lastLoadedMapPtr);
+                import std.string : stripRight;
+                lastLoadedMap = toDString(deusex, lastLoadedMapPtr).stripRight.stripRight("\0");
                 mapLabel.text = lastLoadedMap;
             }
         }
