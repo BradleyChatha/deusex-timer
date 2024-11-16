@@ -1,5 +1,6 @@
 module toolkit.ui;
 
+import std.typecons : Flag;
 import core.time : Duration;
 
 abstract class Ansi
@@ -53,7 +54,7 @@ class UiLoop
     void loop(const Duration targetLoopTime)
     {
         import std.datetime          : Clock;
-        import std.stdio             : writeln;
+        import std.stdio             : writeln, writefln;
         import core.atomic           : atomicStore, atomicLoad;
         import core.thread           : Thread;
         import core.sys.posix.signal : signal, SIGINT;
@@ -75,7 +76,7 @@ class UiLoop
             }
 
             const loopTime = Clock.currTime() - startTime;
-            writeln(loopTime);
+            writefln("target: %s | taken: %s", targetLoopTime, loopTime);
             if(loopTime < targetLoopTime)
                 Thread.sleep(targetLoopTime - loopTime);
             lastFrameTime = startTime;
@@ -208,6 +209,7 @@ class SplitList : UiComponent
         string version_ = "1"; // In case I ever want to change the JSON format in the future, but still load old splits.
 
         string displayName() const => this.name.length ? this.name : this.id;
+        Duration delta() const => this.endTime - this.startTime;
     }
 
     enum SplitStyle
@@ -406,13 +408,9 @@ class SplitList : UiComponent
             const fastest = this._fastestEverSplits[i];
             const slowest = this._fastestEverSplits[i];
 
-            const thisRunDelta = thisRun.endTime - thisRun.startTime;
-            const fastestDelta = fastest.endTime - fastest.startTime;
-            const slowestDelta = slowest.endTime - slowest.startTime;
-
-            if(fastestDelta == Duration.zero || fastestDelta > thisRunDelta)
+            if(fastest.delta == Duration.zero || fastest.delta > thisRun.delta)
                 this._fastestEverSplits[i] = thisRun;
-            if(slowestDelta == Duration.zero || slowestDelta < thisRunDelta)
+            if(slowest.delta == Duration.zero || slowest.delta < thisRun.delta)
                 this._slowestEverSplits[i] = thisRun;
         }
     }
@@ -440,11 +438,11 @@ class SplitList : UiComponent
             SplitStyle style;
             if(i < this._currentRunIndex)
             {
-                if(current.endTime < fastest.endTime)
+                if(current.delta < fastest.delta)
                     style = SplitStyle.glod;
-                else if(current.endTime < pb.endTime)
+                else if(current.delta < pb.delta)
                     style = SplitStyle.fasterButNotGlod;
-                else if(current.endTime > slowest.endTime)
+                else if(current.delta > slowest.delta)
                     style = SplitStyle.slowest;
                 else
                     style = SplitStyle.slower;
@@ -458,8 +456,8 @@ class SplitList : UiComponent
                 ? pb.endTime
                 : current.endTime;
             const elapsed = (style == SplitStyle.active) 
-                ? this._elapsed 
-                : current.endTime + (current.endTime - current.startTime);
+                ? this._elapsed - toBeat 
+                : current.delta - pb.delta;
             this.drawSplit(current.displayName, toBeat, elapsed, style);
         }
     }
@@ -531,12 +529,11 @@ class SplitList : UiComponent
                 break;
 
             case active:
-                const deltaColour = (delta < toBeat) ? Ansi.green : Ansi.red;
-                const plusSign    = (delta < toBeat) ? "" : "+";
+                const deltaColour = (delta < Duration.zero) ? Ansi.green : Ansi.red;
                 line("%s%s", Ansi.white, name);
-                line("%s%s -> %s%s%s", 
+                line("%s%s -> %s%s", 
                     Ansi.blue, formatDuration(toBeat), 
-                    deltaColour, plusSign, formatDuration(delta - toBeat),
+                    deltaColour, formatDuration(delta, WithPlusSign.yes),
                 );
                 break;
             
@@ -544,7 +541,7 @@ class SplitList : UiComponent
                 line("%s%s", Ansi.yellow, name);
                 line("%s%s << %s%s", 
                     Ansi.yellow, formatDuration(toBeat), 
-                    Ansi.green, formatDuration(delta - toBeat)
+                    Ansi.green, formatDuration(delta, WithPlusSign.yes)
                 );
                 break;
 
@@ -552,23 +549,23 @@ class SplitList : UiComponent
                 line("%s%s%s", Ansi.bold, Ansi.hiBlack, name);
                 line("%s%s < %s%s", 
                     Ansi.hiBlack, formatDuration(toBeat), 
-                    Ansi.green, formatDuration(delta - toBeat)
+                    Ansi.green, formatDuration(delta, WithPlusSign.yes)
                 );
                 break;
 
             case slower:
                 line("%s%s%s", Ansi.bold, Ansi.hiBlack, name);
-                line("%s%s > %s+%s", 
+                line("%s%s > %s%s", 
                     Ansi.hiBlack, formatDuration(toBeat), 
-                    Ansi.red, formatDuration(delta - toBeat)
+                    Ansi.red, formatDuration(delta, WithPlusSign.yes)
                 );
                 break;
 
             case slowest:
                 line("%s%s", Ansi.red, name);
-                line("%s%s >> %s+%s", 
+                line("%s%s >> %s%s", 
                     Ansi.red, formatDuration(toBeat), 
-                    Ansi.red, formatDuration(delta - toBeat)
+                    Ansi.red, formatDuration(delta, WithPlusSign.yes)
                 );
                 break;
         }
@@ -630,7 +627,9 @@ class SplitListStyleTest : SplitList
     }
 }
 
-private string formatDuration(const Duration duration)
+private alias WithPlusSign = Flag!"withPlusSign";
+
+private string formatDuration(const Duration duration, WithPlusSign withPlusSign = WithPlusSign.no)
 {
     import std.math   : abs;
     import std.string : format;
@@ -640,6 +639,7 @@ private string formatDuration(const Duration duration)
     const minutes    = abs(duration.total!"minutes" % 60);
     const seconds    = abs(duration.total!"seconds" % 60);
     const millis     = abs(duration.total!"msecs" % 1000);
+    const sign       = (withPlusSign && !isNegative) ? "+" : (isNegative ? "-" : "");
 
-    return format("%s%02d:%02d:%02d.%03d", isNegative ? "-" : "", hours, minutes, seconds, millis);
+    return format("%s%02d:%02d:%02d.%03d", sign, hours, minutes, seconds, millis);
 }

@@ -221,6 +221,7 @@ auto deusExController(
 
             case endCutscene:
                 timer.pause();
+                splitList.split();
                 splitList.updateSplits();
                 mapLabel.text = "🎉🎉 Ending cutscene, run complete! 🎉🎉";
                 break;
