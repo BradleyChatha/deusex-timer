@@ -2,6 +2,7 @@ module toolkit.ui;
 
 import std.typecons : Flag;
 import core.time : Duration;
+import toolkit.input;
 
 abstract class Ansi
 {
@@ -24,25 +25,56 @@ abstract class Ansi
     static const clear      = "\x1b[2J\x1b[H";
 }
 
+alias BackgroundUpdate = Flag!"backgroundUpdate";
+
+struct UiInput
+{
+    KeyEvent[] keyboard;
+    bool inputEnabled; // Whether the UI should directly respond to keyboard input - not applicable for all things.
+}
+
 // More for code organisation than a proper, robust UI system - hence why there's barely any common configurable options.
 interface UiComponent
 {
     void draw();
-    void update(Duration delta);
+    void update(Duration delta, BackgroundUpdate isBackgroundUpdate, UiInput input);
 }
 
 class UiLoop
 {
+    import core.sys.linux.input : KEY_LEFTSHIFT, KEY_LEFTCTRL, KEY_RIGHTALT, KEY_ESC, KEY_W, KEY_S, KEY_ENTER;
+
     private
     {
+        alias PersistedKeys = PersistedInput!([KEY_LEFTSHIFT, KEY_LEFTCTRL]);
+
         static bool _looping; // Must be static for easy access from signal handler.
         
-        UiComponent[] _components;
+        Scene[string] _sceneByName;
+        Scene _activeScene;
+
+        IProcessedInput _input;
+        PersistedKeys _modifiers;
+        bool _canUseInput;
     }
 
-    void addComponent(UiComponent component)
+    this(IProcessedInput input)
+    in(input !is null)
     {
-        this._components ~= component;
+        this._input = input;
+        this._modifiers = new PersistedKeys();
+    }
+
+    void addScene(string name, Scene scene)
+    in(name.length > 0)
+    in(scene !is null)
+    {
+        this._sceneByName[name] = scene;
+    }
+
+    void setActiveScene(string name)
+    {
+        this._activeScene = this._sceneByName[name];
     }
 
     private static extern(C) void onSigInt(int _) @nogc nothrow
@@ -61,6 +93,7 @@ class UiLoop
         
         atomicStore(UiLoop._looping, true);
         signal(SIGINT, &onSigInt);
+        this.addMenuScene();
 
         auto lastFrameTime = Clock.currTime();
         while(atomicLoad(UiLoop._looping))
@@ -68,34 +101,155 @@ class UiLoop
             const startTime = Clock.currTime();
             const delta = startTime - lastFrameTime;
 
+            auto input = this.handleInput();
             writeln(Ansi.clear);
-            foreach(component; this._components)
+            this._activeScene.activeTick(delta, input);
+
+            foreach(_, scene; this._sceneByName)
             {
-                component.update(delta);
-                component.draw();
+                if(scene is this._activeScene)
+                    continue;
+                scene.backgroundTick(delta, input);
             }
 
             const loopTime = Clock.currTime() - startTime;
-            writefln("target: %s | taken: %s", targetLoopTime, loopTime);
+            writefln("target: %s | taken: %s | input: %s", targetLoopTime, loopTime, this._canUseInput);
             if(loopTime < targetLoopTime)
                 Thread.sleep(targetLoopTime - loopTime);
             lastFrameTime = startTime;
+        }
+    }
+
+    private void addMenuScene()
+    {
+        static class Menu : UiComponent
+        {
+            static struct SceneWithName { string name; Scene scene; }
+
+            UiLoop loop;
+            SceneWithName[] scenes;
+            size_t cursor;
+
+            this(UiLoop loop)
+            {
+                import std.algorithm : sort;
+                foreach(name, scene; loop._sceneByName)
+                    this.scenes ~= SceneWithName(name, scene);
+                this.scenes.sort!"a.name < b.name"();
+                this.loop = loop;
+            }
+
+            override void update(Duration delta, BackgroundUpdate isBackgroundUpdate, UiInput input)
+            {
+                foreach(key; input.keyboard)
+                {
+                    if(key.state != PressState.pressed && key.state != PressState.tapped)
+                        continue;
+
+                    switch(key.key)
+                    {
+                        case KEY_W:
+                            if(this.cursor != 0)
+                                this.cursor--;
+                            break;
+                        
+                        case KEY_S:
+                            if(this.cursor != this.scenes.length-1) // @suppress(dscanner.suspicious.length_subtraction)
+                                this.cursor++;
+                            break;
+
+                        case KEY_ENTER:
+                            this.loop.setActiveScene(this.scenes[this.cursor].name);
+                            break;
+
+                        default: break;
+                    }
+                }
+            }
+
+            override void draw()
+            {
+                import std.stdio : writefln;
+
+                foreach(i, scene; this.scenes)
+                {
+                    const colour = (i == this.cursor) ? Ansi.green ~ "> " : Ansi.white;
+                    writefln("%s%s%s", colour, scene.name, Ansi.reset);
+                }
+            }
+        }
+
+        this.addScene("Menu", new Scene([new Menu(this)]));
+    }
+
+    private UiInput handleInput()
+    {
+        import std.algorithm : any;
+
+        KeyEvent[] keyboardInput;
+        this._input.nextInputs((scope inputs){
+            keyboardInput = inputs.dup;
+        });
+        
+        this._modifiers.onInput(keyboardInput);
+        scope(exit) this._modifiers.resetTappedKeys();
+        
+        if(
+            this._modifiers.isDown(KEY_LEFTCTRL) 
+            && this._modifiers.isDown(KEY_LEFTSHIFT)
+            && keyboardInput.any!(ke => ke.key == KEY_RIGHTALT && ke.state == PressState.pressed) // @suppress(dscanner.style.long_line)
+        )
+        {
+            this._canUseInput = !this._canUseInput;
+        }
+
+        if(this._canUseInput && keyboardInput.any!(ke => ke.key == KEY_ESC && ke.state == PressState.pressed))
+            this.setActiveScene("Menu");
+
+        return UiInput(keyboardInput, this._canUseInput);
+    }
+}
+
+class Scene
+{
+    private
+    {
+        UiComponent[] _components;
+    }
+
+    this(UiComponent[] components)
+    {
+        this._components = components;
+    }
+
+    void backgroundTick(Duration delta, UiInput input)
+    {
+        foreach(component; this._components)
+            component.update(delta, BackgroundUpdate.yes, input);
+    }
+
+    void activeTick(Duration delta, UiInput input)
+    {
+        foreach(component; this._components)
+        {
+            component.update(delta, BackgroundUpdate.no, input);
+            component.draw();
         }
     }
 }
 
 class UpdateOnlyComponent : UiComponent
 {
-    private void delegate(Duration) _func;
+    private void delegate(Duration, BackgroundUpdate, UiInput) _func;
 
     this(typeof(_func) func)
     {
         this._func = func;
     }
 
-    override void update(Duration delta)
+    override void update(Duration delta, BackgroundUpdate isBackgroundUpdate, UiInput input)
     {
-        this._func(delta);
+        this._func(delta, isBackgroundUpdate, input);
     }
 
     override void draw() {}
@@ -119,7 +273,7 @@ class Label : UiComponent
             writefln("  %s%s%s", this.colour, this.text, Ansi.reset);
     }
 
-    override void update(Duration _){}
+    override void update(Duration _, BackgroundUpdate __, UiInput ___){}
 }
 
 class Timer : UiComponent
@@ -139,7 +293,7 @@ class Timer : UiComponent
         bool _skipNext;
     }
 
-    void pause() { this._state = State.paused;  }
+    void pause() { this._state = State.paused; }
     void resume() 
     {
         if(this._state == State.running)
@@ -150,7 +304,7 @@ class Timer : UiComponent
 
     Duration elapsed() const => this._elapsed;
 
-    override void update(Duration delta)
+    override void update(Duration delta, BackgroundUpdate isBackgroundUpdate, UiInput input)
     {
         final switch(this._state) with(State)
         {
@@ -422,7 +576,7 @@ class SplitList : UiComponent
         }
     }
 
-    override void update(Duration delta)
+    override void update(Duration delta, BackgroundUpdate isBackgroundUpdate, UiInput input)
     {
     }
 
@@ -587,7 +741,7 @@ class SplitList : UiComponent
 
 class SplitListStyleTest : SplitList
 {
-    override void update(Duration delta){}
+    override void update(Duration delta, BackgroundUpdate isBackgroundUpdate, UiInput input){}
 
     override void draw()
     {
@@ -647,7 +801,7 @@ class CompactSplitViewer : UiComponent
         this._splits = splits;
     }
 
-    override void update(Duration delta){}
+    override void update(Duration delta, BackgroundUpdate isBackgroundUpdate, UiInput input){}
 
     override void draw()
     {

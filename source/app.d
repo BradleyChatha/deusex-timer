@@ -1,4 +1,4 @@
-import toolkit.process, toolkit.finders, toolkit.patcher, toolkit.ui;
+import toolkit.process, toolkit.finders, toolkit.patcher, toolkit.ui, toolkit.input;
 
 version(linux){}
 else static assert(false, "Only Linux is supported.");
@@ -87,6 +87,13 @@ auto INITIAL_SPLITS = [
     SplitList.Split("15_Area51_Final"),
 ];
 
+import core.sys.linux.input;
+immutable KEYS_TO_LISTEN_FOR = [
+    KEY_W, KEY_A, KEY_S, KEY_D,
+    KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
+    KEY_SPACE, KEY_LEFTSHIFT, KEY_LEFTCTRL, KEY_RIGHTALT, KEY_ESC, KEY_ENTER
+];
+
 int main()
 {
     import core.time        : dur;
@@ -129,11 +136,18 @@ int main()
         lastLoadedMapAddress,
     ));
 
-    auto ui = new UiLoop();
-    ui.addComponent(controller);
-    ui.addComponent(timer);
-    ui.addComponent(mapLabel);
-    ui.addComponent(splitList);
+    auto keyboard = new RawInput();
+    auto mouse = new RawInput("/dev/input/mouse0");
+    auto input = new ProcessedInput!KEYS_TO_LISTEN_FOR(keyboard, mouse);
+
+    auto ui = new UiLoop(input);
+    ui.addScene("Speedrun Timer", new Scene([
+        cast(UiComponent)controller,
+        cast(UiComponent)timer,
+        cast(UiComponent)mapLabel,
+        cast(UiComponent)splitList,
+    ]));
+    ui.setActiveScene("Speedrun Timer");
     ui.loop(dur!"msecs"(16)); // Try to be 2x faster than the game to minimise amount of extra time added to the timer.
 
     const splitsJson = splitList.toJson();
@@ -168,7 +182,7 @@ auto deusExController(
     bool wasLoadingLastTick;
     string lastLoadedMap;
 
-    return delegate (Duration _){
+    return delegate (Duration _, BackgroundUpdate __, UiInput ___){
         // process_vm_readv sometimes fails with ESRCH and I have no idea why, so ignore any errors for now.
         bool isLoading = false;
         try isLoading = deusex.peek!bool(flagsAddress);
