@@ -242,6 +242,11 @@ class SplitList : UiComponent
         );
     }
 
+    const(Split)[] currentSplits() const => this._currentRun;
+    const(Split)[] personalBestSplits() const => this._personalBestRun;
+    const(Split)[] fastestEverSplits() const => this._fastestEverSplits;
+    const(Split)[] slowestEverSplits() const => this._slowestEverSplits;
+
     this(){} // Mainly useful for testing.
 
     this(Split[] initialSplits, JSONValue root)
@@ -341,7 +346,9 @@ class SplitList : UiComponent
         {
             this._currentRun[this._currentRunIndex].endTime = this._elapsed;
             this._currentRunIndex++;
-            this._currentRun[this._currentRunIndex].startTime = this._elapsed;
+            
+            if(this._currentRunIndex < this._currentRun.length)
+                this._currentRun[this._currentRunIndex].startTime = this._elapsed;
         }
     }
 
@@ -421,12 +428,16 @@ class SplitList : UiComponent
 
     override void draw() 
     {
-        const start = (this._currentRunIndex < 2) 
-                        ? 0 
-                        : this._currentRunIndex - 2;
-        const end = (this._currentRunIndex + 3 >= this._currentRun.length) 
-                        ? this._currentRun.length 
-                        : this._currentRunIndex + 3;
+        const runIsOver = (this._currentRunIndex >= this._currentRun.length); // @suppress(dscanner.suspicious.length_subtraction)
+
+        const start = (runIsOver) ? 0 : 
+                        (this._currentRunIndex < 2) 
+                            ? 0 
+                            : this._currentRunIndex - 2;
+        const end = (runIsOver) ? this._currentRun.length :
+                        (this._currentRunIndex + 3 >= this._currentRun.length) 
+                            ? this._currentRun.length 
+                            : this._currentRunIndex + 3;
 
         foreach(i; start..end)
         {
@@ -453,12 +464,12 @@ class SplitList : UiComponent
                 style = SplitStyle.upcoming;
 
             const toBeat = (style == SplitStyle.active || style == SplitStyle.upcoming) 
-                ? pb.endTime
-                : current.endTime;
+                ? pb
+                : current;
             const elapsed = (style == SplitStyle.active) 
-                ? this._elapsed - toBeat 
+                ? (this._elapsed - current.startTime) - toBeat.delta
                 : current.delta - pb.delta;
-            this.drawSplit(current.displayName, toBeat, elapsed, style);
+            this.drawSplit(current.displayName, toBeat.endTime, elapsed, style);
         }
     }
 
@@ -624,6 +635,36 @@ class SplitListStyleTest : SplitList
             uniform(0, 1_000_000).dur!"msecs",
             SplitStyle.slowest
         );
+    }
+}
+
+class CompactSplitViewer : UiComponent
+{
+    private const(SplitList.Split)[] _splits;
+
+    this(const SplitList.Split[] splits)
+    {
+        this._splits = splits;
+    }
+
+    override void update(Duration delta){}
+
+    override void draw()
+    {
+        import std.algorithm : map, maxElement;
+        import std.range     : repeat, take;
+        import std.stdio     : writefln;
+        const longestSplitName = this._splits.map!(s => s.displayName.length).maxElement;
+    
+        foreach(const split; this._splits)
+        {
+            writefln("%s%s | %s (%s)", 
+                split.displayName, 
+                repeat(' ').take(longestSplitName - split.displayName.length),
+                formatDuration(split.endTime),
+                formatDuration(split.delta)
+            );
+        }
     }
 }
 
