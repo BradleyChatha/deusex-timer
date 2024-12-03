@@ -141,6 +141,9 @@ class UiLoop
 
             override void update(Duration delta, BackgroundUpdate isBackgroundUpdate, UiInput input)
             {
+                if(!input.inputEnabled)
+                    return;
+
                 foreach(key; input.keyboard)
                 {
                     if(key.state != PressState.pressed && key.state != PressState.tapped)
@@ -304,6 +307,14 @@ class Timer : UiComponent
 
     Duration elapsed() const => this._elapsed;
 
+    void reset()
+    {
+        this._rtaElapsed = Duration.zero;
+        this._elapsed = Duration.zero;
+        this._state = State.waitingForFirstLoad;
+        this._skipNext = false;
+    }
+
     override void update(Duration delta, BackgroundUpdate isBackgroundUpdate, UiInput input)
     {
         final switch(this._state) with(State)
@@ -379,6 +390,7 @@ class SplitList : UiComponent
 
     private
     {
+        Split[] _runSeed;
         Split[] _currentRun;
         Split[] _personalBestRun;
         Split[] _fastestEverSplits;
@@ -442,6 +454,7 @@ class SplitList : UiComponent
             return list;
         }
 
+        this._runSeed           = initialSplits;
         this._currentRun        = initialSplits;
         this._personalBestRun   = splitListFromJson(root["personalBest"]); // @suppress(dscanner.vcall_ctor)
         this._fastestEverSplits = splitListFromJson(root["fastestEver"]); // @suppress(dscanner.vcall_ctor)
@@ -515,6 +528,13 @@ class SplitList : UiComponent
     void updateElapsedTime(Duration elapsed)
     {
         this._elapsed = elapsed;
+    }
+
+    void reset()
+    {
+        this._currentRun = this._runSeed;
+        this._elapsed = Duration.zero;
+        this._currentRunIndex = 0;
     }
 
     JSONValue toJson()

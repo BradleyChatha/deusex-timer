@@ -12,6 +12,7 @@ struct FStringNoCap
     uint length;
 }
 
+const RESTART_MAP  = "00_Intro";
 const STARTING_MAP = "01_NYC_UNATCOIsland";
 const ENDING_MAP   = "99_Endgame1";
 
@@ -180,6 +181,7 @@ auto deusExController(
     }
     State state;
     bool wasLoadingLastTick;
+    bool endOnce;
     string lastLoadedMap;
 
     return delegate (Duration _, BackgroundUpdate __, UiInput ___){
@@ -208,6 +210,14 @@ auto deusExController(
                 mapLabel.text = lastLoadedMap;
             }
         }
+
+        void restart()
+        {
+            state = State.waitingForFirstLoad;
+            mapLabel.text = "Restart was detected";
+            timer.reset();
+            splitList.reset();
+        }
         
         final switch(state) with(State)
         {
@@ -226,6 +236,11 @@ auto deusExController(
                         state = endCutscene;
                         goto case endCutscene;
                     }
+                    else if(lastLoadedMap == RESTART_MAP)
+                    {
+                        restart();
+                        break;
+                    }
 
                     timer.resume();
                 }
@@ -234,10 +249,19 @@ auto deusExController(
                 break;
 
             case endCutscene:
-                timer.pause();
-                splitList.split();
-                splitList.updateSplits();
-                mapLabel.text = "🎉🎉 Ending cutscene, run complete! 🎉🎉";
+                if(!endOnce)
+                {
+                    timer.pause();
+                    splitList.split();
+                    splitList.updateSplits();
+                    mapLabel.text = "🎉🎉 Ending cutscene, run complete! 🎉🎉";
+                    endOnce = true;
+                }
+                else if(lastLoadedMap == RESTART_MAP)
+                {
+                    restart();
+                    break;
+                }
                 break;
         }
     };
