@@ -15,6 +15,7 @@ struct FStringNoCap
 const RESTART_MAP  = "00_Intro";
 const STARTING_MAP = "01_NYC_UNATCOIsland";
 const ENDING_MAP   = "99_Endgame1";
+const BUGGY_MAPS   = ["05_NYC_UNATCOMJ12Lab", "..\\Save\\Current\\08_NYC_Street.dxs", "14_Oceanlab_silo.dx"]; // These levels use the Glitchy Save which throws an exception - the exception path isn't caught in the ASM injection right now, so we'll just have to go RTA with these maps.
 
 const SAVE_FILE         = "splits.json";
 const BACKUP_FILE       = SAVE_FILE~".bak";
@@ -172,6 +173,7 @@ auto deusExController(
 )
 {
     import core.time : Duration;
+    import std.algorithm : canFind;
 
     enum State
     {
@@ -208,6 +210,9 @@ auto deusExController(
                 import std.string : stripRight;
                 lastLoadedMap = toDString(deusex, lastLoadedMapPtr).stripRight.stripRight("\0");
                 mapLabel.text = lastLoadedMap;
+
+                if(BUGGY_MAPS.canFind(lastLoadedMap))
+                    mapLabel.text = lastLoadedMap ~ " (RTA edge case)";
             }
         }
 
@@ -245,7 +250,10 @@ auto deusExController(
                     timer.resume();
                 }
                 else
-                    timer.pause();
+                {
+                    if(!BUGGY_MAPS.canFind(lastLoadedMap))
+                        timer.pause();
+                }
                 break;
 
             case endCutscene:
